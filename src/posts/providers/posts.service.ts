@@ -1,4 +1,9 @@
-import { Injectable, Body } from '@nestjs/common';
+import {
+  Injectable,
+  Body,
+  RequestTimeoutException,
+  BadRequestException,
+} from '@nestjs/common';
 import { UsersService } from 'src/users/providers/users.service';
 import { CreatePostDto } from '../dtos/create-post.dto';
 import { Repository } from 'typeorm';
@@ -7,6 +12,9 @@ import { MetaOption } from 'src/meta-options/meta-option.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { TagsService } from 'src/tags/providers/tags.service';
 import { PatchPostDto } from '../dtos/patch-post.dto';
+import { Tag } from 'src/tags/tag.entity';
+import { CreatePostProvider } from './create-post.provider';
+import { ActiveUserData } from 'src/auth/interfaces/active-user-data.interface';
 
 @Injectable()
 export class PostsService {
@@ -32,51 +40,19 @@ export class PostsService {
      * Inject tags service
      */
     private readonly tagsService: TagsService,
+
+    /**
+     * Inject create post provider
+     */
+    private readonly createPostProvider: CreatePostProvider,
   ) {}
 
   /**
    *
    * @param createPostDto
    */
-  public async create(@Body() createPostDto: CreatePostDto) {
-    // Find author from database based on authorId
-    const author = await this.usersService.findOneById(createPostDto.authorId);
-
-    const tags = await this.tagsService.findMultipleTags(createPostDto.tags!);
-    /*
-     * IN CASCADE SITUATION
-     */
-
-    //Create post
-    const post = this.postRepository.create({
-      ...createPostDto,
-      author: author!,
-      tags: tags,
-    });
-
-    //return the post
-    return await this.postRepository.save(post);
-
-    /* In NOT CASCADE SITUATION
-    //Create metaOptions
-    let metaOptions: MetaOption | undefined;
-
-    if (createPostDto.metaOptions) {
-      metaOptions = this.metaOptionsRepository.create(
-        createPostDto.metaOptions,
-      );
-      await this.metaOptionsRepository.save(metaOptions);
-    }
-
-    //Create post & add metaOptions to the post
-    const post = this.postRepository.create({
-      ...createPostDto,
-      metaOptions, // undefined if not provided
-    });
-
-    //return the post
-    return await this.postRepository.save(post);
-    */
+  public async create(createPostDto: CreatePostDto, user: ActiveUserData) {
+    return await this.createPostProvider.create(createPostDto, user);
   }
 
   /**
@@ -129,13 +105,43 @@ export class PostsService {
    * Update Posts
    */
   public async update(patchPostDto: PatchPostDto) {
+    let tags: Tag[] | null = null;
+    let post: Post | null = null;
+
     //Find the tags
-    const tags = await this.tagsService.findMultipleTags(patchPostDto.tags!);
+    try {
+      tags = await this.tagsService.findMultipleTags(patchPostDto.tags!);
+    } catch (error) {
+      console.log('Error', error);
+      throw new RequestTimeoutException(
+        'Unable to process your request at the moment. Please try later',
+      );
+    }
+
+    /**
+     * Number of tags need to be equal
+     */
+    if (!tags || tags.length !== patchPostDto.tags?.length) {
+      throw new BadRequestException(
+        'Please check your tag ids and ensure they are correct',
+      );
+    }
 
     //Find the post
-    const post = await this.postRepository.findOneBy({
-      id: patchPostDto.id,
-    });
+    try {
+      post = await this.postRepository.findOneBy({
+        id: patchPostDto.id,
+      });
+    } catch (error) {
+      console.log('Error', error);
+      throw new RequestTimeoutException(
+        'Unable to process your request at the moment. Please try later',
+      );
+    }
+
+    if (!post) {
+      throw new BadRequestException('The post ID does not exist');
+    }
 
     //Update the properties of the post
     if (post) {
@@ -153,6 +159,14 @@ export class PostsService {
     }
 
     //Save the post and return
-    return await this.postRepository.save(post!);
+    try {
+      await this.postRepository.save(post);
+    } catch (error) {
+      console.log('Error', error);
+      throw new RequestTimeoutException(
+        'Unable to process your request at the moment. Please try later',
+      );
+    }
+    return post;
   }
 }
